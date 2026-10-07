@@ -154,7 +154,7 @@ const RUNTIME_PARAMS_: &[ParamType] = &[
         "--hot                             Enable auto reload in the Bun runtime, test runner, or bundler"
     ),
     parse_param!(
-        "--no-clear-screen                 Disable clearing the terminal screen on reload when --hot or --watch is enabled"
+        "--no-clear-screen                 Disable clearing the terminal screen on reload with --hot, --watch, or the Bun.serve() dev server"
     ),
     parse_param!(
         "--check                           Type check before running. Nothing runs if there are type errors. Alone: <b>bun check<r>"
@@ -1092,9 +1092,6 @@ pub(crate) fn parse(cmd: CommandTag, ctx: Context<'_>) -> crate::Result<api::Tra
 
         if args.flag(b"--hot") {
             ctx.debug.hot_reload = HotReload::Hot;
-            if args.flag(b"--no-clear-screen") {
-                let _ = bun_dotenv::HAS_NO_CLEAR_SCREEN_CLI_FLAG.set(true);
-            }
         } else if args.flag(b"--watch") {
             ctx.debug.hot_reload = HotReload::Watch;
 
@@ -1104,10 +1101,11 @@ pub(crate) fn parse(cmd: CommandTag, ctx: Context<'_>) -> crate::Result<api::Tra
             {
                 bun_core::set_auto_reload_on_crash(true);
             }
+        }
 
-            if args.flag(b"--no-clear-screen") {
-                let _ = bun_dotenv::HAS_NO_CLEAR_SCREEN_CLI_FLAG.set(true);
-            }
+        // Also read by the Bun.serve() dev server, which hot-reloads without --hot or --watch.
+        if args.flag(b"--no-clear-screen") {
+            let _ = bun_dotenv::HAS_NO_CLEAR_SCREEN_CLI_FLAG.set(true);
         }
 
         if let Some(kill_signal) = args.option(b"--watch-kill-signal") {

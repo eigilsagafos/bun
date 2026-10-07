@@ -1,6 +1,6 @@
 import type { Server, Subprocess } from "bun";
 import { describe, expect, test } from "bun:test";
-import { bunEnv, bunExe, isDebug, tempDir, tempDirWithFiles } from "harness";
+import { bunEnv, bunExe, isDebug, isWindows, tempDir, tempDirWithFiles } from "harness";
 import { join } from "path";
 
 function replaceHash(html: string) {
@@ -1119,6 +1119,71 @@ test.concurrent("dev server started after process.chdir() reports bundle failure
   expect(stderr).toContain(`Could not resolve: "./does-not-exist"`);
   expect(stdout, stderr).toBe(JSON.stringify({ status: 500 }));
   expect(exitCode).toBe(0);
+});
+
+// The dev server only clears a terminal, so this runs under a PTY rather than a pipe.
+async function editAndWaitForReloadInTerminal(args: string[], env: Record<string, string | undefined> = {}) {
+  using dir = tempDir("bun-serve-html-terminal", {
+    "index.html": `<!DOCTYPE html><html><body><script type="module" src="./main.ts"></script></body></html>`,
+    "main.ts": `console.log("hi");`,
+    "server.ts": /*ts*/ `
+      import page from "./index.html";
+      const server = Bun.serve({ port: 0, development: true, routes: { "/": page } });
+      await fetch(server.url);
+      console.log("READY");
+    `,
+  });
+  let output = "";
+  let check = () => {};
+  const decoder = new TextDecoder();
+  await using proc = Bun.spawn({
+    cmd: [bunExe(), ...args, "server.ts"],
+    env: { ...bunEnv, NO_COLOR: undefined, ...env },
+    cwd: String(dir),
+    terminal: {
+      data(_terminal, data) {
+        output += decoder.decode(data, { stream: true });
+        check();
+      },
+    },
+  });
+  let reloaded = false;
+  const exited = proc.exited.then(code => {
+    if (!reloaded) throw new Error(`exited with ${code} before the reload:\n${output}`);
+  });
+  const waitFor = (text: string) =>
+    Promise.race([
+      new Promise<void>(resolve => {
+        check = () => output.includes(text) && resolve();
+        check();
+      }),
+      exited,
+    ]);
+  await waitFor("READY");
+  await Bun.write(join(String(dir), "main.ts"), `console.log("again");`);
+  await waitFor("Reloaded in");
+  reloaded = true;
+  proc.kill();
+  await exited;
+  return output;
+}
+
+// Windows' ConPTY repaints the console itself instead of passing the clear sequence through.
+describe.skipIf(isWindows)("dev server clears the terminal on reload", () => {
+  const clearScreen = "\x1b[2J\x1b[3J\x1b[H";
+
+  test.concurrent("by default", async () => {
+    expect(await editAndWaitForReloadInTerminal([])).toContain(clearScreen);
+  });
+
+  test.concurrent("not with --no-clear-screen", async () => {
+    expect(await editAndWaitForReloadInTerminal(["--no-clear-screen"])).not.toContain(clearScreen);
+  });
+
+  test.concurrent("not with BUN_CONFIG_NO_CLEAR_TERMINAL_ON_RELOAD=1", async () => {
+    const output = await editAndWaitForReloadInTerminal([], { BUN_CONFIG_NO_CLEAR_TERMINAL_ON_RELOAD: "1" });
+    expect(output).not.toContain(clearScreen);
+  });
 });
 
 test("wildcard static routes", async () => {
