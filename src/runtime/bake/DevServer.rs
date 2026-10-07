@@ -35,6 +35,7 @@ use crate::api::{AnyServer, SavedRequest};
 use crate::bake;
 use crate::bake::framework_router::{self as framework_router, FrameworkRouter, OpaqueFileId};
 use crate::server::html_bundle::HTMLBundleRoute;
+use crate::server::server_config::DevelopmentLogLevel;
 use crate::timer::{EventLoopTimer, EventLoopTimerState, EventLoopTimerTag};
 use crate::webcore::{Request as WebRequest, Response};
 use bun_ast::Loader;
@@ -147,6 +148,7 @@ pub(crate) struct Options<'a> {
     pub framework: bake::Framework,
     pub bundler_options: bake::SplitBundlerOptions,
     pub broadcast_console_log_from_browser_to_server: bool,
+    pub log_level: DevelopmentLogLevel,
 }
 
 // Note: the fields (`arena`, `root`, `vm`, `framework`,
@@ -405,6 +407,7 @@ pub(crate) struct DevServer {
 
     /// If true, console logs from the browser will be echoed to the server console.
     pub(crate) broadcast_console_log_from_browser_to_server: bool,
+    pub(crate) log_level: DevelopmentLogLevel,
 }
 
 bun_event_loop::impl_timer_owner!(DevServer; from_timer_ptr => memory_visualizer_timer);
@@ -565,6 +568,7 @@ pub(crate) fn init(options: Options) -> JsResult<Box<DevServer>> {
             broadcast_console_log_from_browser_to_server,
             options.broadcast_console_log_from_browser_to_server
         );
+        w!(log_level, options.log_level);
         w!(bundles_since_last_error, 0);
         w!(has_tailwind_plugin_hack, None);
         w!(configuration_hash_key, [0; 16]);
@@ -1048,6 +1052,7 @@ impl Drop for DevServer {
                 memory_visualizer_timer: _,
                 assume_perfect_incremental_bundling: _,
                 broadcast_console_log_from_browser_to_server: _,
+                log_level: _,
             } = &*self;
         }
 
@@ -3291,7 +3296,9 @@ impl DevServer {
             if cfg!(debug_assertions) {
                 bun_core::debug_warn!("dev.log should not be written into when using DevServer");
             }
-            let _ = self.log.print(std::ptr::from_mut(Output::error_writer()));
+            if self.log_level <= DevelopmentLogLevel::Error {
+                let _ = self.log.print(std::ptr::from_mut(Output::error_writer()));
+            }
         }
         Ok(())
     }
@@ -4698,8 +4705,10 @@ pub(super) fn finalize_bundle(
     }
 
     if dev.bundling_failures.is_empty() {
+        let print_bundle_line = dev.log_level == DevelopmentLogLevel::Info;
         if current_bundle!().had_reload_event {
-            let clear_terminal = !bun_output::scope_is_visible!(DevServer)
+            let clear_terminal = print_bundle_line
+                && !bun_output::scope_is_visible!(DevServer)
                 && !dev
                     .vm()
                     .env_loader()
@@ -4713,7 +4722,7 @@ pub(super) fn finalize_bundle(
             dev.print_memory_line();
 
             dev.bundles_since_last_error += 1;
-            if dev.bundles_since_last_error > 1 {
+            if print_bundle_line && dev.bundles_since_last_error > 1 {
                 bun_core::pretty_error!("<cyan>[x{}]<r> ", dev.bundles_since_last_error);
             }
         } else {
@@ -4723,83 +4732,86 @@ pub(super) fn finalize_bundle(
 
         let ms_elapsed = u64::try_from(current_bundle!().timer.elapsed().as_millis()).unwrap();
 
-        bun_core::pretty_error!(
-            "<green>{} in {}ms<r>",
-            if current_bundle!().had_reload_event {
-                "Reloaded"
-            } else {
-                "Bundled page"
-            },
-            ms_elapsed,
-        );
-
-        // Intentionally creating a new scope here so we can limit the lifetime
-        // of the `relative_path_buf`
-        {
-            let mut buf = paths::path_buffer_pool::get();
-
-            // Compute a file name to display
-            let file_name: Option<&[u8]> = if current_bundle!().had_reload_event {
-                if !bv2.graph.entry_points.is_empty() {
-                    Some(dev.relative_path(&mut *buf, {
-                        use bun_bundler::Graph::InputFileColumns as _;
-                        bv2.graph.input_files.items_source()
-                            [bv2.graph.entry_points[0].get() as usize]
-                            .path
-                            .text
-                    }))
+        if print_bundle_line {
+            bun_core::pretty_error!(
+                "<green>{} in {}ms<r>",
+                if current_bundle!().had_reload_event {
+                    "Reloaded"
                 } else {
-                    None // TODO: How does this happen
-                }
-            } else {
-                'brk: {
-                    let route_bundle_index = 'rbi: {
-                        let first = current_bundle!().requests.first;
-                        if !first.is_null() {
-                            // SAFETY: `first` is a live intrusive node held by current_bundle.requests; `data` was initialized by `defer_request`.
-                            break 'rbi unsafe { (*first).data.assume_init_ref() }
-                                .route_bundle_index;
-                        }
-                        let route_bundle_indices =
-                            current_bundle!().promise.route_bundle_indices.keys();
-                        if route_bundle_indices.is_empty() {
-                            break 'brk None;
-                        }
-                        break 'rbi route_bundle_indices[0];
-                    };
+                    "Bundled page"
+                },
+                ms_elapsed,
+            );
 
-                    // Note: index `route_bundles` immutably so `dev.relative_path`
-                    // / `dev.router` / `dev.server_graph` reads below stay disjoint.
-                    break 'brk match &dev.route_bundles[route_bundle_index.get() as usize].data {
-                        route_bundle::Data::Html(html) => {
-                            Some(dev.relative_path(&mut *buf, &html.html_bundle.bundle.path))
-                        }
-                        route_bundle::Data::Framework(fw) => 'file_name: {
-                            let route = dev.router.route_ptr(fw.route_index);
-                            let opaque_id = match route.file_page.or(route.file_layout) {
-                                Some(id) => id,
-                                None => break 'file_name None,
-                            };
-                            let server_index =
-                                from_opaque_file_id::<{ bake::Side::Server }>(opaque_id);
-                            let abs_path =
-                                &dev.server_graph.bundled_files.keys()[server_index.get() as usize];
-                            break 'file_name Some(dev.relative_path(&mut *buf, abs_path));
-                        }
-                    };
-                }
-            };
+            // Intentionally creating a new scope here so we can limit the lifetime
+            // of the `relative_path_buf`
+            {
+                let mut buf = paths::path_buffer_pool::get();
 
-            let total_count = bv2.graph.entry_points.len();
-            if let Some(name) = file_name {
-                bun_core::pretty_error!("<d>:<r> {}", bstr::BStr::new(name));
-                if total_count > 1 {
-                    bun_core::pretty_error!(" <d>+ {} more<r>", total_count - 1);
+                // Compute a file name to display
+                let file_name: Option<&[u8]> = if current_bundle!().had_reload_event {
+                    if !bv2.graph.entry_points.is_empty() {
+                        Some(dev.relative_path(&mut *buf, {
+                            use bun_bundler::Graph::InputFileColumns as _;
+                            bv2.graph.input_files.items_source()
+                                [bv2.graph.entry_points[0].get() as usize]
+                                .path
+                                .text
+                        }))
+                    } else {
+                        None // TODO: How does this happen
+                    }
+                } else {
+                    'brk: {
+                        let route_bundle_index = 'rbi: {
+                            let first = current_bundle!().requests.first;
+                            if !first.is_null() {
+                                // SAFETY: `first` is a live intrusive node held by current_bundle.requests; `data` was initialized by `defer_request`.
+                                break 'rbi unsafe { (*first).data.assume_init_ref() }
+                                    .route_bundle_index;
+                            }
+                            let route_bundle_indices =
+                                current_bundle!().promise.route_bundle_indices.keys();
+                            if route_bundle_indices.is_empty() {
+                                break 'brk None;
+                            }
+                            break 'rbi route_bundle_indices[0];
+                        };
+
+                        // Note: index `route_bundles` immutably so `dev.relative_path`
+                        // / `dev.router` / `dev.server_graph` reads below stay disjoint.
+                        break 'brk match &dev.route_bundles[route_bundle_index.get() as usize].data
+                        {
+                            route_bundle::Data::Html(html) => {
+                                Some(dev.relative_path(&mut *buf, &html.html_bundle.bundle.path))
+                            }
+                            route_bundle::Data::Framework(fw) => 'file_name: {
+                                let route = dev.router.route_ptr(fw.route_index);
+                                let opaque_id = match route.file_page.or(route.file_layout) {
+                                    Some(id) => id,
+                                    None => break 'file_name None,
+                                };
+                                let server_index =
+                                    from_opaque_file_id::<{ bake::Side::Server }>(opaque_id);
+                                let abs_path = &dev.server_graph.bundled_files.keys()
+                                    [server_index.get() as usize];
+                                break 'file_name Some(dev.relative_path(&mut *buf, abs_path));
+                            }
+                        };
+                    }
+                };
+
+                let total_count = bv2.graph.entry_points.len();
+                if let Some(name) = file_name {
+                    bun_core::pretty_error!("<d>:<r> {}", bstr::BStr::new(name));
+                    if total_count > 1 {
+                        bun_core::pretty_error!(" <d>+ {} more<r>", total_count - 1);
+                    }
                 }
             }
+            bun_core::pretty_error!("\n");
+            Output::flush();
         }
-        bun_core::pretty_error!("\n");
-        Output::flush();
 
         if let Some(agent) = dev.inspector() {
             agent.notify_bundle_complete(dev.inspector_server_id, ms_elapsed as f64);
@@ -5864,6 +5876,9 @@ impl DevServer {
     }
 
     pub(crate) fn on_watch_error(&self, err: sys::Error) {
+        if self.log_level > DevelopmentLogLevel::Error {
+            return;
+        }
         if !err.path.is_empty() {
             // Note: split out path before moving `err` into `Output::err`.
             let path = err.path.clone();
@@ -5947,7 +5962,9 @@ impl DevServer {
         log: &framework_router::TinyLog,
     ) -> Result<(), AllocError> {
         // TODO: maybe this should track the error, send over HmrSocket?
-        log.print(rel_path);
+        if self.log_level <= DevelopmentLogLevel::Error {
+            log.print(rel_path);
+        }
         Ok(())
     }
 
@@ -5958,6 +5975,9 @@ impl DevServer {
         ty: framework_router::FileKind,
     ) -> Result<(), AllocError> {
         // TODO: maybe this should track the error, send over HmrSocket?
+        if self.log_level > DevelopmentLogLevel::Error {
+            return Ok(());
+        }
         Output::err_generic(
             "Multiple {} matching the same route pattern is ambiguous",
             (ty.collision_noun(),),

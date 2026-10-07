@@ -86,6 +86,7 @@ pub(crate) fn memory_cost_detailed(dev: &DevServer) -> MemoryCost {
             memory_visualizer_timer: _,
             assume_perfect_incremental_bundling: _,
             broadcast_console_log_from_browser_to_server: _,
+            log_level: _,
         } = dev;
     }
 

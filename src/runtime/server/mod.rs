@@ -2263,6 +2263,8 @@ impl<const SSL: bool, const DEBUG: bool> NewServer<SSL, DEBUG> {
                     .config
                     .broadcast_console_log_from_browser_to_server_for_bake
             };
+            // SAFETY: `server` is the freshly-boxed `*mut Self`; uniquely owned here.
+            let log_level = unsafe { (*server).config.development_log_level };
             let dev = match crate::bake::DevServer::init(crate::bake::DevServer::Options {
                 arena: &bake_options.arena,
                 root: bake_options.root,
@@ -2275,6 +2277,7 @@ impl<const SSL: bool, const DEBUG: bool> NewServer<SSL, DEBUG> {
                 framework: core::mem::take(&mut bake_options.framework).into(),
                 bundler_options: core::mem::take(&mut bake_options.bundler_options).into(),
                 broadcast_console_log_from_browser_to_server: broadcast,
+                log_level,
             }) {
                 Ok(d) => d,
                 Err(e) => {

@@ -21,6 +21,7 @@ use super::{
 };
 use crate::bake::dev_server_body::{CachedFileIndex, HotUpdateContext};
 use crate::bake::{self, Side};
+use crate::server::server_config::DevelopmentLogLevel;
 
 /// `bun.GenericIndex(u30, File)` — file index into `bundled_files`.
 ///
@@ -1494,7 +1495,10 @@ impl<const SIDE: bake::Side> IncrementalGraph<SIDE> {
 
         // Errors print straight to the terminal; a stdio manager that could
         // re-render the error list alongside a REPL is a pending idea.
-        let _ = log.print(std::ptr::from_mut(bun_core::Output::error_writer()));
+        // SAFETY: see `owner()`.
+        if unsafe { (*dev).log_level } <= DevelopmentLogLevel::Error {
+            let _ = log.print(std::ptr::from_mut(bun_core::Output::error_writer()));
+        }
 
         let failure = {
             let mut buf = bun_paths::path_buffer_pool::get();

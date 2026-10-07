@@ -23,7 +23,7 @@ use crate::api::js_bundler::js_bundler::{self as JSBundler, Config as JSBundlerC
 use crate::api::output_file_jsc::OutputFileJsc as _;
 use crate::bake::dev_server::route_bundle;
 use crate::server::jsc::{JSGlobalObject, JSValue, JsResult};
-use crate::server::server_config::MethodOptional;
+use crate::server::server_config::{DevelopmentLogLevel, MethodOptional};
 use crate::server::{AnyRoute, AnyServer, GetOrStartLoadResult, ServePluginsCallback, StaticRoute};
 use crate::webcore::AnyBlob;
 
@@ -365,7 +365,8 @@ impl Route {
 
     /// Production keeps the reason to itself, see `resume_pending_responses`.
     fn set_build_error(&self, server: AnyServer, log: Log) {
-        if server.config().is_development() {
+        let config = server.config();
+        if config.is_development() && config.development_log_level <= DevelopmentLogLevel::Error {
             // `Log::print` takes the process-global writer as a `*mut io::Writer` through `IntoLogWrite`.
             let writer: *mut bun_core::io::Writer = bun_output::error_writer_buffered();
             let _ = log.print(writer);
@@ -528,7 +529,9 @@ impl Route {
                 let global_this = bun_opaque::opaque_deref(server.global_this());
                 let output_files = &mut bundle.output_files;
 
-                if server.config().is_development() {
+                if server.config().is_development()
+                    && server.config().development_log_level == DevelopmentLogLevel::Info
+                {
                     let now = bun_core::util::Timespec::now_allow_mocked_time().ns();
                     let duration = now.saturating_sub(completion_task.started_at_ns);
                     let duration_f64 = duration as f64 / 1_000_000_000.0;

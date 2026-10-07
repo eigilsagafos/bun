@@ -39,6 +39,7 @@ pub(crate) struct ServerConfig {
     pub(crate) max_request_body_size: usize,
     pub(crate) development: DevelopmentOption,
     pub(crate) broadcast_console_log_from_browser_to_server_for_bake: bool,
+    pub(crate) development_log_level: DevelopmentLogLevel,
 
     /// Enable automatic workspace folders for Chrome DevTools
     /// https://chromium.googlesource.com/devtools/devtools-frontend/+/main/docs/ecosystem/automatic_workspace_folders.md
@@ -87,6 +88,7 @@ impl Default for ServerConfig {
             max_request_body_size: 1024 * 1024 * 128,
             development: DevelopmentOption::Development,
             broadcast_console_log_from_browser_to_server_for_bake: false,
+            development_log_level: DevelopmentLogLevel::Info,
             enable_chrome_devtools_automatic_workspace_folders: true,
             on_error: JSValue::ZERO,
             on_request: JSValue::ZERO,
@@ -154,6 +156,24 @@ impl DevelopmentOption {
     pub(crate) fn is_development(self) -> bool {
         self == DevelopmentOption::Development || self == DevelopmentOption::DevelopmentWithoutHmr
     }
+}
+
+/// `development.logLevel`: the least severe development-mode bundler output that is printed.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DevelopmentLogLevel {
+    Info,
+    Warn,
+    Error,
+    Silent,
+}
+
+bun_core::comptime_string_map! {
+    static DEVELOPMENT_LOG_LEVEL_MAP: DevelopmentLogLevel = {
+        b"info" => DevelopmentLogLevel::Info,
+        b"warn" => DevelopmentLogLevel::Warn,
+        b"error" => DevelopmentLogLevel::Error,
+        b"silent" => DevelopmentLogLevel::Silent,
+    };
 }
 
 impl ServerConfig {
@@ -288,6 +308,7 @@ impl ServerConfig {
             development: self.development,
             broadcast_console_log_from_browser_to_server_for_bake: self
                 .broadcast_console_log_from_browser_to_server_for_bake,
+            development_log_level: self.development_log_level,
             enable_chrome_devtools_automatic_workspace_folders: self
                 .enable_chrome_devtools_automatic_workspace_folders,
             on_error: self.on_error,
@@ -699,6 +720,15 @@ impl ServerConfig {
 
                 if let Some(console) = dev.get_boolean_strict(global, "console")? {
                     args.broadcast_console_log_from_browser_to_server_for_bake = console;
+                }
+
+                if let Some(level) = dev.get_optional_enum_from_map(
+                    global,
+                    "logLevel",
+                    &DEVELOPMENT_LOG_LEVEL_MAP,
+                    "\"info\", \"warn\", \"error\", or \"silent\"",
+                )? {
+                    args.development_log_level = level;
                 }
 
                 if let Some(v) =

@@ -1121,6 +1121,93 @@ test.concurrent("dev server started after process.chdir() reports bundle failure
   expect(exitCode).toBe(0);
 });
 
+describe("development.logLevel", () => {
+  const brokenImport = `import { nope } from "./does-not-exist"; console.log(nope);`;
+  const printed = (stderr: string) => ({
+    bundled: /Bundled page in|\] bundle index\.html/.test(stderr),
+    reloaded: stderr.includes("Reloaded in"),
+    error: stderr.includes(`Could not resolve: "./does-not-exist"`),
+  });
+
+  test.concurrent.each([
+    [undefined, { bundled: true, reloaded: true, error: true }],
+    ["info", { bundled: true, reloaded: true, error: true }],
+    ["warn", { bundled: false, reloaded: false, error: true }],
+    ["error", { bundled: false, reloaded: false, error: true }],
+    ["silent", { bundled: false, reloaded: false, error: false }],
+  ])("%p with hot reloading", async (logLevel, expected) => {
+    using dir = tempDir("bun-serve-html-log-level", {
+      "index.html": `<!DOCTYPE html><html><body><script type="module" src="./main.ts"></script></body></html>`,
+      "main.ts": `console.log("first");`,
+      "serve.ts": /*ts*/ `
+        import page from "./index.html";
+        import { writeFileSync } from "node:fs";
+        const server = Bun.serve({
+          port: 0,
+          development: { logLevel: ${JSON.stringify(logLevel)} },
+          routes: { "/": page },
+        });
+        async function load() {
+          const res = await fetch(server.url);
+          const src = (await res.text()).match(/<script[^>]+src="([^"]+)"/)?.[1];
+          return { status: res.status, script: src ? await (await fetch(new URL(src, server.url))).text() : "" };
+        }
+        await load();
+        writeFileSync("main.ts", 'console.log("second");');
+        while (!(await load()).script.includes("second"));
+        writeFileSync("main.ts", ${JSON.stringify(brokenImport)});
+        while ((await load()).status !== 500);
+        server.stop(true);
+        console.log("done");
+      `,
+    });
+    const { stdout, stderr, exitCode } = await runServeFixture(dir);
+    expect(printed(stderr)).toEqual(expected);
+    expect(stdout, stderr).toBe("done");
+    expect(exitCode).toBe(0);
+  });
+
+  test.concurrent.each([
+    ["info", { bundled: true, reloaded: false, error: true }],
+    ["error", { bundled: false, reloaded: false, error: true }],
+    ["silent", { bundled: false, reloaded: false, error: false }],
+  ])("%p without hot reloading", async (logLevel, expected) => {
+    using dir = tempDir("bun-serve-html-log-level-no-hmr", {
+      "index.html": `<!DOCTYPE html><html><body><script type="module" src="./main.ts"></script></body></html>`,
+      "broken.html": `<!DOCTYPE html><html><body><script type="module" src="./broken.ts"></script></body></html>`,
+      "main.ts": `console.log("hi");`,
+      "broken.ts": brokenImport,
+      "serve.ts": /*ts*/ `
+        import page from "./index.html";
+        import broken from "./broken.html";
+        const server = Bun.serve({
+          port: 0,
+          development: { hmr: false, logLevel: ${JSON.stringify(logLevel)} },
+          routes: { "/": page, "/broken": broken },
+        });
+        const statuses = [(await fetch(server.url)).status, (await fetch(new URL("/broken", server.url))).status];
+        server.stop(true);
+        console.log(JSON.stringify(statuses));
+      `,
+    });
+    const { stdout, stderr, exitCode } = await runServeFixture(dir);
+    expect(printed(stderr)).toEqual(expected);
+    expect(stdout, stderr).toBe("[200,500]");
+    expect(exitCode).toBe(0);
+  });
+
+  test("rejects an unknown level", () => {
+    expect(() =>
+      Bun.serve({
+        port: 0,
+        // @ts-expect-error
+        development: { logLevel: "verbose" },
+        fetch: () => new Response(),
+      }),
+    ).toThrow('logLevel must be one of "info", "warn", "error", or "silent"');
+  });
+});
+
 test("wildcard static routes", async () => {
   await using dir = tempDir("bun-serve-html-error-handling", {
     "index.html": /*html*/ `

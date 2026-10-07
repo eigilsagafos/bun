@@ -33,6 +33,7 @@ use bun_uws_sys::body_reader_mixin::{BodyReaderHandler, BodyResponse};
 use super::source_map_store::{self, GetResult, Key as SourceMapKey};
 use super::{CLIENT_PREFIX, DevServer};
 use crate::server::StaticRoute;
+use crate::server::server_config::DevelopmentLogLevel;
 use crate::server::static_route::InitFromBytesOptions;
 use bun_core::fmt::parse_hex_to_int;
 
@@ -314,7 +315,7 @@ impl ErrorReportRequest {
             fd: -1,
         };
 
-        {
+        if dev.log_level <= DevelopmentLogLevel::Error {
             let stderr = Output::error_writer_buffered();
             let _flush = Output::flush_guard();
             // `print_externally_remapped_zig_exception` takes a runtime

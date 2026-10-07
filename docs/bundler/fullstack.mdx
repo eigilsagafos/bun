@@ -234,6 +234,21 @@ Bun.serve({
 
 Bun sends the logs over the existing HMR WebSocket connection.
 
+To control what the bundler prints to the terminal, set `logLevel` in the `development` object. It defaults to `"info"`, which prints a `Bundled page in …` or `Reloaded in …` line for each bundle and clears the terminal before each reload. `"warn"` and `"error"` hide those lines, and `"silent"` prints nothing. Bundle errors still show in the browser at every level. This helps when another tool, such as a process manager or a test runner, reads the server's output.
+
+```ts title="src/backend.ts" icon="/icons/typescript.svg"
+Bun.serve({
+  development: {
+    // "info" | "warn" | "error" | "silent"
+    logLevel: "error",
+  },
+
+  routes: {
+    "/": homepage,
+  },
+});
+```
+
 ### Development vs Production
 
 | Feature             | Development           | Production  |

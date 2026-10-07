@@ -563,6 +563,20 @@ declare module "bun" {
           console?: boolean;
 
           /**
+           * The least severe bundler output to print to the terminal for HTML routes.
+           *
+           * - `"info"`: everything, including `Bundled page in …` and `Reloaded in …`, and the terminal clear before each reload
+           * - `"warn"`: warnings and errors
+           * - `"error"`: bundle errors and errors reported by the browser
+           * - `"silent"`: nothing
+           *
+           * Bundle errors are still sent to the browser at every level.
+           *
+           * @default "info"
+           */
+          logLevel?: "info" | "warn" | "error" | "silent";
+
+          /**
            * Enable automatic workspace folders for Chrome DevTools
            *
            * With this enabled, you can persistently edit files in the browser. Bun adds the following route to the server:
